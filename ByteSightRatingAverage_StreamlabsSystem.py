@@ -48,7 +48,7 @@ ScriptName = "ByteSight Rating Average"
 Website = "https://github.com/ByteSightGitHub"
 Description = "Calculates rating averages based on ratings in the chat"
 Creator = "ByteSight"
-Version = "1.0.0.0"
+Version = "1.1.0.0"
 
 #---------------------------
 #   Configuration
@@ -76,7 +76,7 @@ def Init():
 	global t_LastEndTime
 	l_RatedUsers = []
 	l_Ratings = []
-	re_VotingPattern = re.compile("^[0-9][0-9]?[\.,]?[0-9]?$")
+	re_VotingPattern = re.compile("^[0-9][0-9]?[\.,]?[0-9]*$")
 	b_RatingInProgress = False
 	t_StartTime = time.time()
 	t_LastEndTime = None
@@ -85,7 +85,6 @@ def Init():
 def AddRating(user, rating):
 	global l_RatedUsers
 	global l_Ratings
-	# FIXME scrub input
 	rating = rating.replace(",", ".")
 	ratingFloat = float(rating)
 	if ratingFloat > 10:
@@ -133,7 +132,7 @@ def EndRating():
 	global t_LastEndTime
 	b_RatingInProgress = False
 	t_LastEndTime = time.time()
-	finalRating = sum(l_Ratings) / len(l_Ratings)
+	finalRating = float(sum(l_Ratings) / len(l_Ratings))
 	Parent.SendStreamMessage(endMessage.format(finalRating))
 	
 #---------------------------
