@@ -38,6 +38,10 @@ import clr
 clr.AddReference("IronPython.SQLite.dll")
 clr.AddReference("IronPython.Modules.dll")
 
+from VoteParser import VoteParser
+
+from collections import defaultdict
+
 #   Import your Settings class
 #from Settings_Module import MySettings
 
@@ -48,52 +52,49 @@ ScriptName = "ByteSight Rating Average"
 Website = "https://github.com/ByteSightGitHub"
 Description = "Calculates rating averages based on ratings in the chat"
 Creator = "ByteSight"
-Version = "1.1.0.0"
+Version = "1.2.0.0"
+
+#---------------------------
+#   Commands
+#---------------------------
+command_Start = "!start" # Not actually command, just used for the cooldown manager
+command_Help = "!help"
+command_Version = "!version"
 
 #---------------------------
 #   Configuration
 #---------------------------
+global enableDebugging
 global votingTime
 global votingCooldown
-global debugAllowMultiVote
 global startMessage
 global endMessage
+global helpMessage
+enableDebugging = False
 votingTime = 20
 votingCooldown = 20
-debugAllowMultiVote = False
 startMessage = "Rating started, you have {0} seconds!"
-endMessage = "Time's up! Final rating is: {:.1f}"
+endMessage = "Time's up! Final rating: {0}"
+helpMessage = "Give your rating as a number between 0 and 10 with or without decimal places, e.g. 7 or 7.1. Use plus sign for multivote (7.1 + 3.4). Voting again before time is up replaces previous vote(s)."
 
 #---------------------------
 #   [Required] Initialize Data (Only called on load)
 #---------------------------
 def Init():
-	global l_RatedUsers
-	global l_Ratings
-	global re_VotingPattern
+	global parser
+	global d_Ratings
 	global b_RatingInProgress
 	global t_StartTime
-	global t_LastEndTime
-	l_RatedUsers = []
-	l_Ratings = []
-	re_VotingPattern = re.compile("^[0-9][0-9]?[\.,]?[0-9]*$")
+	parser = VoteParser()
+	d_Ratings = defaultdict(list)
 	b_RatingInProgress = False
 	t_StartTime = time.time()
-	t_LastEndTime = None
 	return
 
-def AddRating(user, rating):
-	global l_RatedUsers
-	global l_Ratings
-	rating = rating.replace(",", ".")
-	ratingFloat = float(rating)
-	if ratingFloat > 10:
-		ratingFloat = 10
-	if ratingFloat < 0:
-		ratingFloat = 0
-	Debug("Registered rating: {0} by {1}".format(ratingFloat, user))
-	l_RatedUsers.append(user)
-	l_Ratings.append(ratingFloat)
+def AddRating(user, values):
+	global d_Ratings
+	Debug("Registered rating: {0} by {1}".format(values, user))
+	d_Ratings[user] = values
 	return
 
 def IsTimeUp():
@@ -103,56 +104,78 @@ def IsTimeUp():
 	return timeElapsed >= votingTime
 
 def IsCooldown():
-	global t_LastEndTime
-	if t_LastEndTime is None:
-		Debug("Last end time not set")
-		return False
-	else:
-		currentTime = time.time()
-		timeElapsed = currentTime - t_LastEndTime
-		Debug("Last end time was {0} seconds ago.".format(timeElapsed))
-		return timeElapsed < votingCooldown
+	DebugCooldown(command_Start)
+	return Parent.IsOnCooldown(ScriptName, command_Start)
 
 def Debug(msg):
-	#Parent.SendStreamMessage("DEBUG: {0}".format(msg));
-	return
-	
+	if enableDebugging:
+		Parent.SendStreamMessage("DEBUG: {0}".format(msg));
+
+def DebugCooldown(command):
+	if enableDebugging:
+		Debug("Remaining cooldown for '{0}': {1} seconds".format(command, Parent.GetCooldownDuration(ScriptName, command)))
+		
 def StartRating():
-	global l_RatedUsers
-	global l_Ratings
+	global d_Ratings
 	global b_RatingInProgress
 	global t_StartTime
-	l_RatedUsers = []
-	l_Ratings = []
+	d_Ratings = defaultdict(list)
 	b_RatingInProgress = True
 	t_StartTime = time.time()
 	
 def EndRating():
+	global d_Ratings
 	global b_RatingInProgress
-	global t_LastEndTime
 	b_RatingInProgress = False
-	t_LastEndTime = time.time()
-	finalRating = float(sum(l_Ratings) / len(l_Ratings))
-	Parent.SendStreamMessage(endMessage.format(finalRating))
+	Parent.AddCooldown(ScriptName, command_Start, 30)
+	finalRatings = parser.calculateResults(d_Ratings)
+	finalRatingsRounded = ["{:.1f}".format(float(x)) for x in finalRatings]
+	finalRatingsString = " + ".join(finalRatingsRounded)
+	Parent.SendStreamMessage(endMessage.format(finalRatingsString))
+
+def ShowHelp():
+	Parent.SendStreamMessage(helpMessage)
+
+def ShowVersion():
+	Parent.SendStreamMessage("My version is: {0}".format(Version))
+	
+def HandleCommands(data):
+	if (not data.IsChatMessage()) or (not data.IsWhisper()) or (not data.Message.startswith("!")):
+		return False
+	parts = data.Message.split(" ")
+	command = parts[0]
+	if Parent.IsOnCooldown(ScriptName, command):
+		DebugCooldown(command)
+		return True
+	if data.Message == command_Help:
+		Parent.AddCooldown(ScriptName, command_Help, 30)
+		ShowHelp()
+	if data.Message == command_Version:
+		Parent.AddCooldown(ScriptName, command_Version, 30)
+		ShowVersion()
+	return True
 	
 #---------------------------
 #   [Required] Execute Data / Process messages
 #---------------------------
 def Execute(data):
 	global b_RatingInProgress
+	if HandleCommands(data) == True:
+		return
 	if b_RatingInProgress and IsTimeUp():
 		EndRating()
-	elif data.IsChatMessage() and re_VotingPattern.match(data.Message):
-		if b_RatingInProgress:
-			if debugAllowMultiVote or (data.UserName not in l_RatedUsers):
-				AddRating(data.UserName, data.Message)
-		else:
-			if IsCooldown():
-				Debug("Rating is on cooldown");
+	elif data.IsChatMessage():
+		(valid, values) = parser.tryParseVote(data.Message)
+		if(valid):
+			if b_RatingInProgress:
+				AddRating(data.UserName, values)
 			else:
-				StartRating()
-				AddRating(data.UserName, data.Message)
-				Parent.SendStreamMessage(startMessage.format(votingTime))
+				if IsCooldown():
+					Debug("Rating is on cooldown");
+				else:
+					StartRating()
+					AddRating(data.UserName, values)
+					Parent.SendStreamMessage(startMessage.format(votingTime))
 	return
 	
 #---------------------------
